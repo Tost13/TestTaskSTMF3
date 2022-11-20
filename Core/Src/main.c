@@ -612,24 +612,11 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
   }
 }
 
-/*void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-
-  if (huart->Instance == USART1)
-  {
-    aRxBuffer[RxIndex++] = RxByte;
-    if ((RxByte == '\n') || (RxByte == '\r'))
-      osSemaphoreRelease(BinarySemaphoreUARTHandle);
-  }
-  HAL_UART_Receive_IT(&huart1, (uint8_t *)RxBuff, 1);
-  RxByte = RxBuff[0];
-}*/
-
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   if (GPIO_Pin == Button_Pin)
   {
-    //printf("BUTTON PRESS \r\n");
+    printf("BUTTON ");
     setDeafultValues();
   }
 }
