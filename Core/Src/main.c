@@ -63,6 +63,7 @@ SPI_HandleTypeDef hspi1;
 TIM_HandleTypeDef htim1;
 
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_rx;
 
 PCD_HandleTypeDef hpcd_USB_FS;
 
@@ -85,7 +86,12 @@ osSemaphoreId_t BinarySemaphoreUARTHandle;
 const osSemaphoreAttr_t BinarySemaphoreUART_attributes = {
     .name = "BinarySemaphoreUART"};
 /* USER CODE BEGIN PV */
+int8_t RxByte;
+uint8_t RxBuff[127] = {0};
+uint8_t RxIndex = 0;
 uint8_t aRxBuffer[128] = {0};
+uint16_t oldPos = 0;
+uint16_t newPos = 0;
 // uint8_t RxString[128]={0};
 
 volatile LEDState ledState;
@@ -94,6 +100,7 @@ volatile LEDState ledState;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USB_PCD_Init(void);
@@ -166,6 +173,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_I2C1_Init();
   MX_SPI1_Init();
   MX_USB_PCD_Init();
@@ -173,6 +181,8 @@ int main(void)
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart1, RxBuff, 127);
+  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -507,6 +517,21 @@ static void MX_USB_PCD_Init(void)
 }
 
 /**
+ * Enable DMA controller clock
+ */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
+}
+
+/**
  * @brief GPIO Initialization Function
  * @param None
  * @retval None
@@ -558,19 +583,53 @@ PUTCHAR_PROTOTYPE
   return ch;
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
+
   if (huart->Instance == USART1)
   {
+    oldPos = newPos;
+
+    if (oldPos + Size > 128)
+    {
+      uint16_t datatocopy = 128 - oldPos;
+      memcpy((uint8_t *)aRxBuffer + oldPos, RxBuff, datatocopy);
+
+      oldPos = 0;
+      memcpy((uint8_t *)aRxBuffer, (uint8_t *)RxBuff + datatocopy, (Size - datatocopy));
+      newPos = (Size - datatocopy);
+    }
+
+    else
+    {
+      memcpy((uint8_t *)aRxBuffer + oldPos, RxBuff, Size);
+      newPos = Size + oldPos;
+    }
+
     osSemaphoreRelease(BinarySemaphoreUARTHandle);
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, RxBuff, 127);
+    __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
   }
 }
+
+/*void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+
+  if (huart->Instance == USART1)
+  {
+    aRxBuffer[RxIndex++] = RxByte;
+    if ((RxByte == '\n') || (RxByte == '\r'))
+      osSemaphoreRelease(BinarySemaphoreUARTHandle);
+  }
+  HAL_UART_Receive_IT(&huart1, (uint8_t *)RxBuff, 1);
+  RxByte = RxBuff[0];
+}*/
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   if (GPIO_Pin == Button_Pin)
   {
-    printf("BUTTON PRESS \r\n");
+    //printf("BUTTON PRESS \r\n");
     setDeafultValues();
   }
 }
@@ -635,20 +694,21 @@ void StartUARTTask(void *argument)
 {
   /* USER CODE BEGIN StartUARTTask */
   /* Infinite loop */
-  uint8_t RxBuff[2] = {0};
+
+  char *isEndLine = NULL;
   for (;;)
   {
     osSemaphoreAcquire(BinarySemaphoreUARTHandle, osWaitForever);
-    HAL_UART_Receive_IT(&huart1, (uint8_t *)RxBuff, 1);
+    isEndLine = strchr((char *)aRxBuffer, '\r');
 
-    if ((RxBuff[0] == '\n') || (RxBuff[0] == '\r'))
+    if ((aRxBuffer[0] != 0) && (aRxBuffer != 0) && (isEndLine != 0))
     {
-      printf("%s\r\n", aRxBuffer);
+      // printf("%s\r\n", aRxBuffer);
 
       if (strncmp((char *)aRxBuffer, (char *)"reset", 5) == 0)
       {
         setDeafultValues();
-        printf("RESET received \r\n");
+        //printf("RESET received \r\n");
       }
       else if (strncmp((char *)aRxBuffer, (char *)"status", 6) == 0)
       {
@@ -657,10 +717,9 @@ void StartUARTTask(void *argument)
       }
       else if (strncmp((char *)aRxBuffer, (char *)"state=", 6) == 0)
       {
-        printf("STATE received \r\n");
-        // char * value = strtok((char *)aRxBuffer, (char *)'=');
+        //printf("STATE received \r\n");
         char *value = strchr((char *)aRxBuffer, '=');
-        printf("%s\r\n", value);
+        //printf("%s\r\n", value);
 
         if (value != 0)
         {
@@ -675,13 +734,13 @@ void StartUARTTask(void *argument)
       }
       else if (strncmp((char *)aRxBuffer, (char *)"brightness=", 11) == 0)
       {
-        printf("BRIGHTNESS received \r\n");
+        //printf("BRIGHTNESS received \r\n");
         char *value = strchr((char *)aRxBuffer, '=') + 1;
         if (value != 0)
         {
           uint32_t val = 0;
           val = atoi((char *)value);
-          printf("BRIGHTNESS value %ld\r\n", val);
+          //printf("BRIGHTNESS value %ld\r\n", val);
           if (val <= 100)
             ledState.brightness = val;
           retStatus();
@@ -689,25 +748,27 @@ void StartUARTTask(void *argument)
       }
       else if (strncmp((char *)aRxBuffer, (char *)"frequency=", 10) == 0)
       {
-        printf("FREQUENCY received \r\n");
+        //printf("FREQUENCY received \r\n");
         char *value = strchr((char *)aRxBuffer, '=') + 1;
 
         if (value != 0)
         {
           float val = 0;
           val = atof((char *)value);
-          printf("FREQUENCY value %.4f\r\n", val);
+          //printf("FREQUENCY value %.4f\r\n", val);
           if ((val <= 10.0) && (val >= 0.5))
             ledState.frequency = val;
           retStatus();
         }
       }
+      RxIndex = 0;
       memset(aRxBuffer, 0, strlen((char *)aRxBuffer));
-    }
-    else
-    {
-      strncat((char *)aRxBuffer, (char *)RxBuff, 1);
-    }
+      memset(RxBuff, 0, strlen((char *)RxBuff));
+      isEndLine = NULL;
+      oldPos = 0;
+      newPos = 0;
+
+    } 
     osDelay(1);
   }
   /* USER CODE END StartUARTTask */
