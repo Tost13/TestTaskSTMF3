@@ -3,6 +3,7 @@
 
 # Generated output files
 /Debug/*
+/.settings/*
 
 # Object files
 *.o
